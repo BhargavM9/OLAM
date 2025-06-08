@@ -1,5 +1,5 @@
 ---
-- name: Ensure NRPE is installed, configured, and running
+- name: Install and configure NRPE on target servers
   hosts: "{{ nagios_targets }}"
   become: true
   vars:
@@ -8,10 +8,16 @@
 
   tasks:
 
-    - name: Check if nrpe is already installed
+    - name: Check if NRPE is installed
       command: rpm -q nrpe
       register: nrpe_check
-      ignore_errors: yes
+      ignore_errors: true
+
+    - name: Enable EPEL repository (only if NRPE not installed)
+      yum:
+        name: epel-release
+        state: present
+      when: nrpe_check.rc != 0
 
     - name: Install NRPE if not present
       yum:
@@ -26,8 +32,8 @@
         line: "allowed_hosts={{ allowed_hosts }}"
         backup: yes
 
-    - name: Restart NRPE service
+    - name: Start and enable NRPE service
       service:
         name: nrpe
         state: restarted
-        enabled: yes
+        enabled: true
