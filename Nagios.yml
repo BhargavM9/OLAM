@@ -1,6 +1,6 @@
 ---
 - name: Ensure NRPE is installed, configured, and running
-  hosts: nagios_targets
+  hosts: "{{ nagios_targets }}"
   become: true
   vars:
     allowed_hosts: "192.168.10.135"
