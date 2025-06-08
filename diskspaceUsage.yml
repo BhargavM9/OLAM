@@ -1,0 +1,13 @@
+---
+- name: Check disk space on remote hosts
+  hosts: all
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Get disk space details
+      shell: df -Th
+      register: disk_space
+
+    - name: Display disk usage output
+      debug:
+        msg: "{{ disk_space.stdout_lines }}"
