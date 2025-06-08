@@ -1,0 +1,30 @@
+---
+- name: Create a user for a new employee
+  hosts: "{{ target_server }}"
+  become: true
+  vars:
+    home_dir: "/home/{{ userid }}"
+    user_shell: "{{ user_shell | default('/bin/bash') }}"
+    uid: "{{ uid | default(omit) }}"
+    gid: "{{ gid | default(omit) }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - target_server is defined
+          - userid is defined
+          - username is defined
+        fail_msg: "target_server, userid, and username are required."
+
+    - name: Create employee user account
+      ansible.builtin.user:
+        name: "{{ userid }}"
+        uid: "{{ uid }}"
+        gid: "{{ gid }}"
+        comment: "{{ username }}"
+        shell: "{{ user_shell }}"
+        home: "{{ home_dir }}"
+        create_home: yes
+        state: present
+
