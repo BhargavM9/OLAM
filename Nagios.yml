@@ -1,0 +1,33 @@
+---
+- name: Ensure NRPE is installed, configured, and running
+  hosts: nagios_targets
+  become: true
+  vars:
+    allowed_hosts: "192.168.10.135"
+    nrpe_config_file: "/etc/nagios/nrpe.cfg"
+
+  tasks:
+
+    - name: Check if nrpe is already installed
+      command: rpm -q nrpe
+      register: nrpe_check
+      ignore_errors: yes
+
+    - name: Install NRPE if not present
+      yum:
+        name: nrpe
+        state: present
+      when: nrpe_check.rc != 0
+
+    - name: Ensure allowed_hosts is set correctly in nrpe.cfg
+      lineinfile:
+        path: "{{ nrpe_config_file }}"
+        regexp: '^allowed_hosts='
+        line: "allowed_hosts={{ allowed_hosts }}"
+        backup: yes
+
+    - name: Restart NRPE service
+      service:
+        name: nrpe
+        state: restarted
+        enabled: yes
