@@ -1,0 +1,82 @@
+---
+- name: Create a user and them in a group
+  hosts: "{{ targets }}"
+  become: yes
+  gather_facts: no
+
+  vars_prompt:
+    - name: "targets"
+      prompt: "Enter the target server name"
+      private: no
+
+    - name: "username"
+      prompt: "Enter the username"
+      private: no
+
+    - name: "uid"
+      prompt: "Enter the UID (press Enter to skip)"
+      private: no
+      default: ""
+
+    - name: "groupname"
+      prompt: "Enter the secondary group name (press Enter to skip)"
+      private: no
+      default: ""
+
+    - name: "shell"
+      prompt: "Enter the shell (press Enter to use default: /bin/bash)"
+      private: no
+      default: ""
+
+    - name: "comment"
+      prompt: "Enter a comment (press Enter to skip)"
+      private: no
+      default: ""
+
+  tasks:
+    - name: Check if group is provided
+      debug:
+        msg: "No group provided, skipping group creation."
+      when: groupname == ""
+
+    - name: Check if group exists (only if groupname is provided)
+      ansible.builtin.command: "getent group {{ groupname }}"
+      register: group_check
+      failed_when: false
+      changed_when: false
+      when: groupname != ""
+
+    - name: Create group if it does not exist
+      ansible.builtin.group:
+        name: "{{ groupname }}"
+        state: present
+      when:
+        - groupname != ""
+        - group_check.rc != 0
+
+    - name: Check if user exists
+      ansible.builtin.command: "getent passwd {{ username }}"
+      register: user_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create user if does not exist
+      ansible.builtin.user:
+        name: "{{ username }}"
+        shell: "{{ (shell | length > 0) | ternary(shell, '/bin/bash') }}"
+        comment: "{{ (comment | length > 0) | ternary(comment, omit) }}"
+        uid: "{{ (uid | length > 0) | ternary(uid | int, omit) }}"
+        groups: "{{ groupname if (groupname | length > 0) else omit }}"
+        append: yes
+        state: present
+      when: user_check.rc != 0
+
+    - name: Inform user already exists
+      ansible.builtin.debug:
+        msg: "User '{{ username }}' already exists on {{ targets }}."
+      when: user_check.rc == 0
+
+    - name: Inform user creation success
+      ansible.builtin.debug:
+        msg: "User '{{ username }}' has been created successfully."
+      when: user_check.rc != 0
