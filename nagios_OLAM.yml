@@ -6,16 +6,23 @@
     nagios_config_repo: "git@github.com:BhargavM9/Nagios-OLAM.git"
     nagios_config_dir: "/home/nagios/nagios-config-tmp"
     nagios_target_dir: "/usr/local/nagios/etc"
+    nagios_cfg_path: "/usr/local/nagios/etc/nagios.cfg"
 
   tasks:
-  
-    - name: Clone or update Git repo as lxadmin
+
+    - name: Ensure Git is installed
+      package:
+        name: git
+        state: present
+
+    - name: Clone or update Git repo as nagios (has GitHub SSH access)
       git:
         repo: "{{ nagios_config_repo }}"
         dest: "{{ nagios_config_dir }}"
         version: main
         update: yes
         accept_hostkey: yes
+        force: yes
       become_user: nagios
 
     - name: Find all files to copy (excluding htpasswd.users)
@@ -25,6 +32,7 @@
         patterns: '*'
         excludes: 'htpasswd.users'
       register: nagios_files
+      become_user: nagios
 
     - name: Copy Nagios config files (excluding htpasswd.users)
       copy:
@@ -34,6 +42,12 @@
         group: nagios
         mode: '0644'
       loop: "{{ nagios_files.files }}"
+
+    - name: Validate Nagios configuration
+      command: "/usr/local/nagios/bin/nagios -v {{ nagios_cfg_path }}"
+      register: nagios_check
+      changed_when: false
+      failed_when: "'Error:' in nagios_check.stdout or nagios_check.rc != 0"
 
     - name: Restart Nagios service
       service:
