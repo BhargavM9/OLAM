@@ -1,0 +1,46 @@
+---
+- name: Update Nagios config from GitHub
+  hosts: "{{ nagios_server }}"
+  become: true
+  vars:
+    nagios_config_repo: "git@github.com:BhargavM9/Nagios-OLAM.git"
+    nagios_config_dir: "/opt/nagios-config-tmp"
+    nagios_target_dir: "/usr/local/nagios/etc"
+
+  tasks:
+    - name: Ensure Git is installed
+      package:
+        name: git
+        state: present
+
+    - name: Clone Nagios config repo (if not already cloned)
+      git:
+        repo: "{{ nagios_config_repo }}"
+        dest: "{{ nagios_config_dir }}"
+        version: main
+        update: yes
+        accept_hostkey: yes
+        force: yes
+      become_user: nagios
+
+    - name: Copy updated config files (excluding htpasswd.users)
+      synchronize:
+        src: "{{ nagios_config_dir }}/"
+        dest: "{{ nagios_target_dir }}/"
+        rsync_opts:
+          - "--exclude=htpasswd.users"
+        recursive: yes
+        delete: no
+
+    - name: Set correct ownership
+      file:
+        path: "{{ nagios_target_dir }}"
+        state: directory
+        recurse: yes
+        owner: nagios
+        group: nagios
+
+    - name: Restart Nagios service
+      service:
+        name: nagios
+        state: restarted
