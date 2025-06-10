@@ -1,5 +1,5 @@
 ---
-- name: Deploy only updated Nagios configs from GitHub
+- name: Deploy updated Nagios configs from GitHub
   hosts: "{{ nagios_server }}"
   become: true
   vars:
@@ -10,11 +10,13 @@
 
   tasks:
 
-    - name: Ensure git and rsync are installed
+    - name: Ensure required packages are installed (git and rsync)
       package:
         name: "{{ item }}"
         state: present
-      loop: [ git, rsync ]
+      loop:
+        - git
+        - rsync
 
     - name: Clone or update Nagios Git repo as nagios
       git:
@@ -26,24 +28,22 @@
         force: yes
       become_user: nagios
 
-    - name: Synchronize only changed files to Nagios config dir
-      synchronize:
-        src: "{{ nagios_config_dir }}/"
-        dest: "{{ nagios_target_dir }}/"
-        archive: yes
-        delete: no
-        rsync_opts:
-          - "--exclude=.git"
-          - "--exclude=htpasswd.users"
-      delegate_to: "{{ inventory_hostname }}"
+    - name: Rsync only updated files to Nagios config directory
+      command: >
+        rsync -az
+        --exclude='.git'
+        --exclude='htpasswd.users'
+        {{ nagios_config_dir }}/ {{ nagios_target_dir }}/
+      args:
+        warn: false
 
-    - name: Validate Nagios config before restart
+    - name: Validate Nagios configuration
       command: "/usr/local/nagios/bin/nagios -v {{ nagios_cfg_path }}"
       register: nagios_check
       changed_when: false
       failed_when: "'Error:' in nagios_check.stdout or nagios_check.rc != 0"
 
-    - name: Restart Nagios service
+    - name: Restart Nagios service if validation passed
       service:
         name: nagios
         state: restarted
