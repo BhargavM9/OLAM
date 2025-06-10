@@ -1,5 +1,5 @@
 ---
-- name: Deploy Nagios configs from OLAM GitHub repo
+- name: Deploy only updated Nagios configs from GitHub
   hosts: "{{ nagios_server }}"
   become: true
   vars:
@@ -10,12 +10,13 @@
 
   tasks:
 
-    - name: Ensure Git is installed
+    - name: Ensure git and rsync are installed
       package:
-        name: git
+        name: "{{ item }}"
         state: present
+      loop: [ git, rsync ]
 
-    - name: Clone or update Git repo as nagios (has GitHub SSH access)
+    - name: Clone or update Nagios Git repo as nagios
       git:
         repo: "{{ nagios_config_repo }}"
         dest: "{{ nagios_config_dir }}"
@@ -25,25 +26,18 @@
         force: yes
       become_user: nagios
 
-    - name: Find all files to copy (excluding htpasswd.users)
-      find:
-        paths: "{{ nagios_config_dir }}"
-        recurse: yes
-        patterns: '*'
-        excludes: 'htpasswd.users'
-      register: nagios_files
-      become_user: nagios
+    - name: Synchronize only changed files to Nagios config dir
+      synchronize:
+        src: "{{ nagios_config_dir }}/"
+        dest: "{{ nagios_target_dir }}/"
+        archive: yes
+        delete: no
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=htpasswd.users"
+      delegate_to: "{{ inventory_hostname }}"
 
-    - name: Copy Nagios config files (excluding htpasswd.users)
-      copy:
-        src: "{{ item.path }}"
-        dest: "{{ nagios_target_dir }}/{{ item.path | regex_replace(nagios_config_dir + '/', '') }}"
-        owner: nagios
-        group: nagios
-        mode: '0644'
-      loop: "{{ nagios_files.files }}"
-
-    - name: Validate Nagios configuration
+    - name: Validate Nagios config before restart
       command: "/usr/local/nagios/bin/nagios -v {{ nagios_cfg_path }}"
       register: nagios_check
       changed_when: false
