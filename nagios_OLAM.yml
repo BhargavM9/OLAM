@@ -4,7 +4,7 @@
   become: true
   vars:
     nagios_config_repo: "git@github.com:BhargavM9/Nagios-OLAM.git"
-    nagios_config_dir: "/home/lxadmin/nagios-config-tmp"
+    nagios_config_dir: "/home/nagios/nagios-config-tmp"
     nagios_target_dir: "/usr/local/nagios/etc"
 
   tasks:
