@@ -30,19 +30,12 @@
     - debug:
         msg: "{{ logged_users.stdout_lines }}"
 
-    - name: Check disk usage on / and print
-      command: df -Th /
-      register: root_disk
+    - name: Check disk usage 
+      command: df -Th 
+      register: disk_usage
       changed_when: false
     - debug:
-        var: root_disk.stdout_lines
-
-    - name: Check disk usage on /boot and print
-      command: df -h /boot
-      register: boot_space
-      changed_when: false
-    - debug:
-        var: boot_space.stdout_lines
+        var: disk_usage.stdout_lines
 
     - name: Check memory usage and print
       command: free -h
