@@ -34,10 +34,10 @@
         msg: "{{ logged_users.stdout_lines }}"
 
     - name: Check disk usage on /
-      command: df -Th /
+      command: df -Th 
       register: root_disk
 
-    - name: Print /
+    - name: Print Disk Usage
       debug:
         var: root_disk.stdout_lines
 
