@@ -9,54 +9,63 @@
 
   tasks:
 
-    - name: Check uptime
+    - name: Check uptime and print
       command: uptime
       register: uptime_output
       changed_when: false
-    - debug: msg="{{ uptime_output.stdout }}"
+    - debug:
+        msg: "{{ uptime_output.stdout }}"
 
-    - name: Last reboot time
+    - name: Check last reboot time and print
       command: who -b
       register: last_reboot
       changed_when: false
-    - debug: msg="{{ last_reboot.stdout }}"
+    - debug:
+        msg: "{{ last_reboot.stdout }}"
 
-    - name: Logged-in users
+    - name: Show currently logged-in users and print
       command: who
       register: logged_users
       changed_when: false
-    - debug: var=logged_users.stdout_lines
+    - debug:
+        msg: "{{ logged_users.stdout_lines }}"
 
-    - name: Check disk usage for root and boot
-      command: df -Th {{ item }}
-      loop:
-        - /
-        - /boot
-      register: disk_usages
+    - name: Check disk usage on / and print
+      command: df -Th /
+      register: root_disk
       changed_when: false
     - debug:
-        msg: "{{ item.stdout_lines }}"
-      loop: "{{ disk_usages.results }}"
+        var: root_disk.stdout_lines
 
-    - name: Check memory usage
+    - name: Check disk usage on /boot and print
+      command: df -h /boot
+      register: boot_space
+      changed_when: false
+    - debug:
+        var: boot_space.stdout_lines
+
+    - name: Check memory usage and print
       command: free -h
       register: mem_usage
       changed_when: false
-    - debug: var=mem_usage.stdout_lines
+    - debug:
+        var: mem_usage.stdout_lines
 
-    - name: Load average
+    - name: Check load average and print
       command: cat /proc/loadavg
       register: load_avg
       changed_when: false
-    - debug: msg="{{ load_avg.stdout }}"
+    - debug:
+        msg: "{{ load_avg.stdout }}"
 
-    - name: Running services
+    - name: List running services and print
       command: systemctl list-units --type=service --state=running
       register: running_services
       changed_when: false
-    - debug: var=running_services.stdout_lines
+    - debug:
+        var: running_services.stdout_lines
 
-    - name: Reboot required?
+    - name: Check if reboot is required
       stat:
         path: /var/run/reboot-required
       register: reboot_required
@@ -64,17 +73,17 @@
     - name: Notify if reboot is required
       when: reboot_required.stat.exists
       debug:
-        msg: "⚠️ Reboot is required before patching!"
+        msg: "Reboot is required before patching!"
 
-    - name: YUM/DNF lock check
+    - name: Check if yum/dnf is locked
       stat:
         path: /var/run/yum.pid
       register: yum_lock
 
-    - name: Warn if YUM/DNF is running
+    - name: Warn if yum is currently running
       when: yum_lock.stat.exists
       debug:
-        msg: "⚠️ YUM/DNF is currently running! Investigate before patching."
+        msg: "YUM/DNF is currently running! Investigate before patching."
 
     # ==========================
     #  Patch Size Estimation
@@ -86,12 +95,20 @@
       changed_when: false
       failed_when: false
 
-    - name: Parse dnf dry-run output
+    - name: Split dnf output into lines
       set_fact:
         dnf_stdout_lines: "{{ dnf_output.stdout.split('\n') }}"
-        dnf_patch_size_line: "{{ dnf_output.stdout | regex_search('Total download size:.*', multiline=True) | default('') }}"
 
-    - name: Calculate patch size in MB
+    - name: Print dnf dry-run output
+      debug:
+        var: dnf_stdout_lines
+
+    - name: Find patch size line
+      set_fact:
+        dnf_patch_size_line: >-
+          {{ dnf_stdout_lines | select('search', 'Total download size:') | list | first | default('') }}
+
+    - name: Parse patch size to MB
       set_fact:
         dnf_required_space_mb: >-
           {% set size = dnf_patch_size_line | regex_search('([0-9.]+)') | float %}
@@ -105,37 +122,37 @@
           {% endif %}
       when: dnf_patch_size_line != ''
 
-    - name: Display patch size estimate
+    - name: Show patch size result
       debug:
         msg: >-
           {% if dnf_patch_size_line != '' %}
-            🛠️ Patch size estimate: {{ dnf_required_space_mb }} MB
+             Patch size estimate: {{ dnf_required_space_mb }} MB
           {% else %}
-            ✅ System is already up to date. No patching required.
+             System is already up to date. No patching required.
           {% endif %}
 
-    - name: Check available space in /var
+    - name: Get available space in /var (in MB)
       command: df -m {{ var_mount_point }}
       register: var_space
       changed_when: false
 
-    - name: Get /var available space
+    - name: Extract /var available space
       set_fact:
         var_available_space_mb: "{{ var_space.stdout_lines[1].split()[3] | int }}"
 
-    - name: Show /var space
+    - name: Print available space in /var
       debug:
-        msg: "📦 Available space in /var: {{ var_available_space_mb }} MB"
+        msg: "Available space in /var: {{ var_available_space_mb }} MB"
 
     - name: Fail if /var space is insufficient for patch
       fail:
-        msg: "❌ Not enough space in /var. Required: {{ dnf_required_space_mb }} MB, Available: {{ var_available_space_mb }} MB"
+        msg: "Not enough space in /var. Required: {{ dnf_required_space_mb }} MB, Available: {{ var_available_space_mb }} MB"
       when:
         - dnf_patch_size_line != ''
         - dnf_required_space_mb > var_available_space_mb
 
-    - name: Final status
+    - name: Final success message
       debug:
-        msg: "✅ Prepatch check passed. System is ready for patching."
+        msg: "Prepatch check passed. System is ready for patching."
       when:
         - dnf_patch_size_line == '' or dnf_required_space_mb <= var_available_space_mb
