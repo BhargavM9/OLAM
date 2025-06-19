@@ -34,7 +34,7 @@
         msg: "{{ logged_users.stdout_lines }}"
 
     - name: Check disk usage on /
-      command: df -h /
+      command: df -Th /
       register: root_disk
 
     - name: Print /
