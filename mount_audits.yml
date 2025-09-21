@@ -31,27 +31,28 @@
         set -e
         getent fstab \
         | awk 'BEGIN{OFS="|"}
-               /^[[:space:]]*#/ {next}                      # skip comments
-               NF < 4 {next}                                # need at least 4 fields
-               $3=="swap" {next}                            # skip swap
-               $4 ~ /noauto/ {next}                         # skip entries not meant to be auto-mounted
+               /^[[:space:]]*#/ {next}
+               NF < 4 {next}
+               $3=="swap" {next}
+               $4 ~ /noauto/ {next}
                $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
                {print $1,$2,$3,$4}'
       register: fstab_raw
       changed_when: false
 
-    - name: Build structured fstab entries
+    - name: Init fstab_entries
+      set_fact:
+        fstab_entries: []
+      when: fstab_raw.stdout != ""
+
+    - name: Build structured fstab entries (portable)
       set_fact:
         fstab_entries: >-
-          {{
-            fstab_raw.stdout_lines
-            | map('split','|')
-            | map('list')
-            | map('zip',['device','mount','fstype','options'])
-            | map('community.general.dict') | list
-          }}
+          {{ fstab_entries
+             + [ {'device': parts[0], 'mount': parts[1], 'fstype': parts[2], 'options': parts[3]} ] }}
       vars:
-        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+        parts: "{{ item.split('|') }}"
+      loop: "{{ fstab_raw.stdout_lines }}"
       when: fstab_raw.stdout != ""
 
     - name: Current live mounts from facts
