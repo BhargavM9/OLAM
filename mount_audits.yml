@@ -1,0 +1,123 @@
+---
+- name: Audit mounts against /etc/fstab on every host
+  hosts: all
+  gather_facts: yes
+  become: yes
+
+  vars:
+    # Filesystems to ignore when comparing (present either in fstab or live)
+    ignore_fstypes:
+      - tmpfs
+      - devtmpfs
+      - proc
+      - sysfs
+      - cgroup
+      - cgroup2
+      - overlay
+      - debugfs
+      - selinuxfs
+      - autofs
+      - fusectl
+      - rpc_pipefs
+      - mqueue
+      - hugetlbfs
+      - pstore
+      - securityfs
+      - binfmt_misc
+
+  tasks:
+    - name: Parse expected mounts from fstab (device|mount|fstype|options)
+      shell: |
+        set -e
+        getent fstab \
+        | awk 'BEGIN{OFS="|"}
+               /^[[:space:]]*#/ {next}                      # skip comments
+               NF < 4 {next}                                # need at least 4 fields
+               $3=="swap" {next}                            # skip swap
+               $4 ~ /noauto/ {next}                         # skip entries not meant to be auto-mounted
+               $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
+               {print $1,$2,$3,$4}'
+      register: fstab_raw
+      changed_when: false
+
+    - name: Build structured fstab entries
+      set_fact:
+        fstab_entries: >-
+          {{
+            fstab_raw.stdout_lines
+            | map('split','|')
+            | map('list')
+            | map('zip',['device','mount','fstype','options'])
+            | map('community.general.dict') | list
+          }}
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      when: fstab_raw.stdout != ""
+
+    - name: Current live mounts from facts
+      set_fact:
+        live_mounts: "{{ ansible_mounts | rejectattr('fstype','in', ignore_fstypes) | list }}"
+        live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
+
+    - name: Compute missing mounts (in fstab but not mounted)
+      set_fact:
+        missing_mounts: >-
+          {{
+            (fstab_entries | default([]))
+            | map(attribute='mount') | list
+            | difference(live_mount_points | default([]))
+          }}
+
+    - name: Find mismatched mounts (mounted but wrong device/fstype vs fstab)
+      set_fact:
+        mismatched_mounts: >-
+          {%
+            set out = [] %}
+          {%
+            for e in (fstab_entries | default([])) %}
+            {%
+              set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
+            {%
+              if live and ( (live[0].device|default('')) != e.device or (live[0].fstype|default('')) != e.fstype ) %}
+              {%
+                set _ = out.append({
+                  'mount': e.mount,
+                  'fstab_device': e.device,
+                  'fstab_fstype': e.fstype,
+                  'live_device': live[0].device|default('unknown'),
+                  'live_fstype': live[0].fstype|default('unknown')
+                }) %}
+              {%
+              endif %}
+          {%
+            endfor %}
+          {{ out }}
+
+    - name: Dry-run mount -a to catch errors the kernel/mounter reports
+      shell: mount -a --dry-run
+      register: mount_dryrun
+      changed_when: false
+      failed_when: false
+
+    - name: Summary per host
+      debug:
+        msg: |
+          Host: {{ inventory_hostname }}
+          Missing mounts: {{ missing_mounts | default([]) }}
+          Mismatched mounts:
+          {{ mismatched_mounts | default([]) | to_nice_json }}
+          mount -a --dry-run rc={{ mount_dryrun.rc }}
+          mount -a --dry-run stderr:
+          {{ (mount_dryrun.stderr | default('')).strip() }}
+
+    - name: Fail if issues found (toggle to only warn)
+      fail:
+        msg: >
+          Mount audit failed on {{ inventory_hostname }}.
+          Missing={{ missing_mounts | default([]) }},
+          Mismatched={{ mismatched_mounts | default([]) }},
+          DryRunRC={{ mount_dryrun.rc }}
+      when: >
+        (missing_mounts | default([]) | length > 0)
+        or (mismatched_mounts | default([]) | length > 0)
+        or (mount_dryrun.rc | int != 0)
