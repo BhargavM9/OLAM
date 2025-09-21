@@ -1,5 +1,5 @@
 ---
-- name: Audit mounts vs fstab and print df -Th (portable)
+- name: Audit mounts vs fstab and print df -Th (UUID-tolerant)
   hosts: all
   gather_facts: yes
   become: yes
@@ -25,47 +25,56 @@
       - binfmt_misc
 
   tasks:
-    # -------- EXPECTED (from /etc/fstab) --------
-    - name: Parse expected mounts from /etc/fstab (device|mount|fstype|options)
+    - name: Get UUID to device map
+      command: lsblk -o NAME,UUID -nr
+      register: blk_output
+      changed_when: false
+
+    - name: Build UUID to device map
+      set_fact:
+        uuid_map: >-
+          {{
+            blk_output.stdout_lines | map('regex_search', '^(\\S+)\\s+(\\S+)?') | select() |
+            map('list') |
+            items2dict(key_name=1, value_name=0)
+          }}
+
+    - name: Parse expected mounts from /etc/fstab
       shell: |
         awk 'BEGIN{OFS="|"}
-             /^[[:space:]]*#/ {next}                      # comments
-             NF < 4 {next}                                # need at least 4 fields
-             $3=="swap" {next}                            # skip swap
-             $4 ~ /noauto/ {next}                         # skip noauto
+             /^[[:space:]]*#/ {next}
+             NF < 4 {next}
+             $3=="swap" {next}
+             $4 ~ /noauto/ {next}
              $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
              {print $1,$2,$3,$4}' /etc/fstab
       register: fstab_raw
       changed_when: false
-      failed_when: false   # some boxes may have very minimal fstab
+      failed_when: false
 
     - name: Init fstab_entries
       set_fact:
         fstab_entries: []
       when: fstab_raw.stdout != ""
 
-    - name: Build structured fstab entries (no external filters)
+    - name: Build structured fstab entries
       set_fact:
         fstab_entries: >-
-          {{ fstab_entries
-             + [ {'device': parts[0], 'mount': parts[1], 'fstype': parts[2], 'options': parts[3]} ] }}
+          {{ fstab_entries + [ {'device': parts[0], 'mount': parts[1], 'fstype': parts[2], 'options': parts[3]} ] }}
       vars:
         parts: "{{ item.split('|') }}"
       loop: "{{ fstab_raw.stdout_lines | default([]) }}"
       when: fstab_raw.stdout != ""
 
-    # -------- LIVE (from facts) --------
-    - name: Set live mounts from facts (filter out virtual fstypes)
+    - name: Set live mounts from facts
       set_fact:
-        live_mounts: "{{ (ansible_mounts | default([]))
-                         | rejectattr('fstype','in', ignore_fstypes) | list }}"
+        live_mounts: "{{ (ansible_mounts | default([])) | rejectattr('fstype','in', ignore_fstypes) | list }}"
 
     - name: Build list of live mount points
       set_fact:
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
-    # -------- COMPARISONS --------
-    - name: Compute missing mounts (in fstab but not mounted)
+    - name: Compute missing mounts
       set_fact:
         missing_mounts: >-
           {{
@@ -73,45 +82,41 @@
             | difference(live_mount_points | default([]))
           }}
 
-    - name: Find mismatched mounts (device/fstype differ vs fstab)
+    - name: Find mismatched mounts (fstype mismatch or device mismatch ignoring UUID vs /dev/*)
       set_fact:
         mismatched_mounts: >-
-          {%
-            set out = [] %}
-          {%
-            for e in (fstab_entries | default([])) %}
-            {%
-              set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
-            {%
-              if live and ( (live[0].device|default('')) != e.device or (live[0].fstype|default('')) != e.fstype ) %}
-              {%
-                set _ = out.append({
+          {% set out = [] %}
+          {% for e in (fstab_entries | default([])) %}
+            {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
+            {% if live %}
+              {% set live_dev = live[0].device | default('') %}
+              {% set live_fstype = live[0].fstype | default('') %}
+              {% set expected_dev = uuid_map.get(e.device.replace("UUID=", ""), e.device) %}
+              {% if live_fstype != e.fstype or live_dev != expected_dev %}
+                {% set _ = out.append({
                   'mount': e.mount,
                   'fstab_device': e.device,
                   'fstab_fstype': e.fstype,
-                  'live_device': live[0].device|default('unknown'),
-                  'live_fstype': live[0].fstype|default('unknown')
+                  'live_device': live_dev,
+                  'live_fstype': live_fstype
                 }) %}
-              {%
-              endif %}
-          {%
-            endfor %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
           {{ out }}
 
-    # -------- DRY RUN & DF OUTPUT --------
-    - name: Dry-run mount -a (portable)  # -f = fake, -a = all, -v = verbose
+    - name: Dry-run mount -a
       shell: mount -fav
       register: mount_dryrun
       changed_when: false
       failed_when: false
 
-    - name: Capture df -Th (verbatim)
+    - name: Capture df -Th
       command: df -Th
       register: df_out
       changed_when: false
 
-    # -------- OUTPUT --------
-    - name: Report problems (missing/mismatched and dry-run rc)
+    - name: Report results clearly
       debug:
         msg: |
           Host: {{ inventory_hostname }}
@@ -122,12 +127,11 @@
           mount -fav output (first 20 lines):
           {{ ((mount_dryrun.stdout | default('')) | split('\n'))[:20] | join('\n') }}
 
-    - name: Print df -Th like on the server
+    - name: Print df -Th like on server
       debug:
         msg: |
           {{ (df_out.stdout | default('')) | trim }}
 
-    # Comment this task if you want report-only behavior
     - name: Fail if issues found
       fail:
         msg: >
