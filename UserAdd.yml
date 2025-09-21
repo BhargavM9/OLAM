@@ -11,8 +11,7 @@
 
     - name: "username"
       prompt: "Enter the username"
-      private: no
-
+      private: no 
     - name: "uid"
       prompt: "Enter the UID (press Enter to skip)"
       private: no
