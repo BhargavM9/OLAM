@@ -1,5 +1,5 @@
 ---
-- name: Audit mounts vs fstab and print df -Th
+- name: Audit mounts vs fstab and print df -Th (portable)
   hosts: all
   gather_facts: yes
   become: yes
@@ -25,28 +25,26 @@
       - binfmt_misc
 
   tasks:
-    # -------- EXPECTED (from fstab) --------
-    - name: Parse expected mounts from fstab (device|mount|fstype|options)
+    # -------- EXPECTED (from /etc/fstab) --------
+    - name: Parse expected mounts from /etc/fstab (device|mount|fstype|options)
       shell: |
-        set -e
-        getent fstab \
-        | awk 'BEGIN{OFS="|"}
-               /^[[:space:]]*#/ {next}
-               NF < 4 {next}
-               $3=="swap" {next}
-               $4 ~ /noauto/ {next}
-               $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
-               {print $1,$2,$3,$4}'
+        awk 'BEGIN{OFS="|"}
+             /^[[:space:]]*#/ {next}                      # comments
+             NF < 4 {next}                                # need at least 4 fields
+             $3=="swap" {next}                            # skip swap
+             $4 ~ /noauto/ {next}                         # skip noauto
+             $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
+             {print $1,$2,$3,$4}' /etc/fstab
       register: fstab_raw
       changed_when: false
-      failed_when: false   # fstab can be empty on some boxes
+      failed_when: false   # some boxes may have very minimal fstab
 
     - name: Init fstab_entries
       set_fact:
         fstab_entries: []
       when: fstab_raw.stdout != ""
 
-    - name: Build structured fstab entries (portable)
+    - name: Build structured fstab entries (no external filters)
       set_fact:
         fstab_entries: >-
           {{ fstab_entries
@@ -101,30 +99,33 @@
           {{ out }}
 
     # -------- DRY RUN & DF OUTPUT --------
-    - name: Dry-run mount -a to catch kernel/mounter errors
-      shell: mount -a --dry-run
+    - name: Dry-run mount -a (portable)  # -f = fake
+      shell: mount -fav
       register: mount_dryrun
       changed_when: false
       failed_when: false
 
-    - name: Run df -Th for human-readable filesystem list
+    - name: Capture df -Th (verbatim)
       command: df -Th
       register: df_out
       changed_when: false
 
-    # -------- SUMMARY --------
-    - name: Summary per host (includes df -Th)
+    # -------- OUTPUT --------
+    - name: Report problems (missing/mismatched and dry-run rc)
       debug:
         msg: |
           Host: {{ inventory_hostname }}
           Missing mounts: {{ missing_mounts | default([]) }}
           Mismatched mounts:
           {{ mismatched_mounts | default([]) | to_nice_json }}
-          mount -a --dry-run rc={{ mount_dryrun.rc }}
-          mount -a --dry-run stderr:
-          {{ (mount_dryrun.stderr | default('')).strip() }}
-          ---- df -Th ----
-          {{ (df_out.stdout | default('')).strip() }}
+          mount -fav rc={{ mount_dryrun.rc }}
+          mount -fav output (truncated to first 20 lines):
+          {{ (mount_dryrun.stdout | default('') | splitlines() | list)[:20] | join('\n') }}
+
+    - name: Print df -Th like on the server
+      debug:
+        msg: |
+          {{ df_out.stdout | trim }}
 
     # Comment this task if you want report-only behavior
     - name: Fail if issues found
