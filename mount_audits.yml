@@ -1,11 +1,10 @@
 ---
-- name: Audit mounts against /etc/fstab on every host
+- name: Audit mounts vs fstab and print df -Th
   hosts: all
   gather_facts: yes
   become: yes
 
   vars:
-    # Filesystems to ignore when comparing (present either in fstab or live)
     ignore_fstypes:
       - tmpfs
       - devtmpfs
@@ -26,6 +25,7 @@
       - binfmt_misc
 
   tasks:
+    # -------- EXPECTED (from fstab) --------
     - name: Parse expected mounts from fstab (device|mount|fstype|options)
       shell: |
         set -e
@@ -39,6 +39,7 @@
                {print $1,$2,$3,$4}'
       register: fstab_raw
       changed_when: false
+      failed_when: false   # fstab can be empty on some boxes
 
     - name: Init fstab_entries
       set_fact:
@@ -52,24 +53,29 @@
              + [ {'device': parts[0], 'mount': parts[1], 'fstype': parts[2], 'options': parts[3]} ] }}
       vars:
         parts: "{{ item.split('|') }}"
-      loop: "{{ fstab_raw.stdout_lines }}"
+      loop: "{{ fstab_raw.stdout_lines | default([]) }}"
       when: fstab_raw.stdout != ""
 
-    - name: Current live mounts from facts
+    # -------- LIVE (from facts) --------
+    - name: Set live mounts from facts (filter out virtual fstypes)
       set_fact:
-        live_mounts: "{{ ansible_mounts | rejectattr('fstype','in', ignore_fstypes) | list }}"
+        live_mounts: "{{ (ansible_mounts | default([]))
+                         | rejectattr('fstype','in', ignore_fstypes) | list }}"
+
+    - name: Build list of live mount points
+      set_fact:
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
+    # -------- COMPARISONS --------
     - name: Compute missing mounts (in fstab but not mounted)
       set_fact:
         missing_mounts: >-
           {{
-            (fstab_entries | default([]))
-            | map(attribute='mount') | list
+            (fstab_entries | default([]) | map(attribute='mount') | list)
             | difference(live_mount_points | default([]))
           }}
 
-    - name: Find mismatched mounts (mounted but wrong device/fstype vs fstab)
+    - name: Find mismatched mounts (device/fstype differ vs fstab)
       set_fact:
         mismatched_mounts: >-
           {%
@@ -94,13 +100,20 @@
             endfor %}
           {{ out }}
 
-    - name: Dry-run mount -a to catch errors the kernel/mounter reports
+    # -------- DRY RUN & DF OUTPUT --------
+    - name: Dry-run mount -a to catch kernel/mounter errors
       shell: mount -a --dry-run
       register: mount_dryrun
       changed_when: false
       failed_when: false
 
-    - name: Summary per host
+    - name: Run df -Th for human-readable filesystem list
+      command: df -Th
+      register: df_out
+      changed_when: false
+
+    # -------- SUMMARY --------
+    - name: Summary per host (includes df -Th)
       debug:
         msg: |
           Host: {{ inventory_hostname }}
@@ -110,8 +123,11 @@
           mount -a --dry-run rc={{ mount_dryrun.rc }}
           mount -a --dry-run stderr:
           {{ (mount_dryrun.stderr | default('')).strip() }}
+          ---- df -Th ----
+          {{ (df_out.stdout | default('')).strip() }}
 
-    - name: Fail if issues found (toggle to only warn)
+    # Comment this task if you want report-only behavior
+    - name: Fail if issues found
       fail:
         msg: >
           Mount audit failed on {{ inventory_hostname }}.
