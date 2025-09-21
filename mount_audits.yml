@@ -99,7 +99,7 @@
           {{ out }}
 
     # -------- DRY RUN & DF OUTPUT --------
-    - name: Dry-run mount -a (portable)  # -f = fake
+    - name: Dry-run mount -a (portable)  # -f = fake, -a = all, -v = verbose
       shell: mount -fav
       register: mount_dryrun
       changed_when: false
@@ -117,15 +117,15 @@
           Host: {{ inventory_hostname }}
           Missing mounts: {{ missing_mounts | default([]) }}
           Mismatched mounts:
-          {{ mismatched_mounts | default([]) | to_nice_json }}
+          {{ mismatched_mounts | default([]) | to_nice_yaml }}
           mount -fav rc={{ mount_dryrun.rc }}
-          mount -fav output (truncated to first 20 lines):
-          {{ (mount_dryrun.stdout | default('') | splitlines() | list)[:20] | join('\n') }}
+          mount -fav output (first 20 lines):
+          {{ ((mount_dryrun.stdout | default('')) | split('\n'))[:20] | join('\n') }}
 
     - name: Print df -Th like on the server
       debug:
         msg: |
-          {{ df_out.stdout | trim }}
+          {{ (df_out.stdout | default('')) | trim }}
 
     # Comment this task if you want report-only behavior
     - name: Fail if issues found
