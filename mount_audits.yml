@@ -1,5 +1,5 @@
 ---
-- name: Mount Audit and df -Th Output
+- name: Audit mounts and display df -Th
   hosts: all
   become: yes
   gather_facts: yes
@@ -26,7 +26,7 @@
 
   tasks:
 
-    - name: Parse expected mounts from /etc/fstab
+    - name: Parse fstab entries into raw lines
       shell: |
         awk 'BEGIN{OFS="|"}
              /^[[:space:]]*#/ {next}
@@ -37,76 +37,68 @@
              {print $1,$2,$3,$4}' /etc/fstab
       register: fstab_raw
       changed_when: false
-      failed_when: false
 
-    - name: Build structured fstab entries
+    - name: Build structured fstab entries from raw lines
       set_fact:
-        fstab_entries: "{{ fstab_raw.stdout_lines | map('split', '|') | map('list') | map('extract_fstab') | list }}"
-      vars:
-        extract_fstab: >
-          {{
-            lambda x: {
-              'device': x[0],
-              'mount': x[1],
-              'fstype': x[2],
-              'options': x[3]
-            } if x|length == 4 else {}
-          }}
+        fstab_entries: "{{ fstab_entries | default([]) + [ {
+          'device': item.split('|')[0],
+          'mount':  item.split('|')[1],
+          'fstype': item.split('|')[2],
+          'options': item.split('|')[3]
+        } ] }}"
+      loop: "{{ fstab_raw.stdout_lines }}"
+      when: item.split('|') | length == 4
 
-    - name: Filter live mounts from facts
+    - name: Filter live mounts from ansible_mounts
       set_fact:
         live_mounts: "{{ ansible_mounts | rejectattr('fstype', 'in', ignore_fstypes) | list }}"
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
-    - name: Compute missing mounts (in fstab but not mounted)
+    - name: Find missing mounts (in fstab but not mounted)
       set_fact:
-        missing_mounts: >-
-          {{ fstab_entries | map(attribute='mount') | list | difference(live_mount_points) }}
+        missing_mounts: "{{ fstab_entries | map(attribute='mount') | list | difference(live_mount_points) }}"
 
-    - name: Find mismatched mounts (device or fstype differ)
+    - name: Find mismatched mounts
       set_fact:
         mismatched_mounts: >-
           {% set out = [] %}
           {% for e in fstab_entries %}
             {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
             {% if live %}
-              {% set live_dev = live[0].device %}
-              {% set live_type = live[0].fstype %}
-              {% if (not e.device.startswith('UUID=')) and (e.device != live_dev or e.fstype != live_type) %}
+              {% if not e.device.startswith('UUID=') and (live[0].device != e.device or live[0].fstype != e.fstype) %}
                 {% set _ = out.append({
                   'mount': e.mount,
                   'fstab_device': e.device,
                   'fstab_fstype': e.fstype,
-                  'live_device': live_dev,
-                  'live_fstype': live_type
+                  'live_device': live[0].device,
+                  'live_fstype': live[0].fstype
                 }) %}
               {% endif %}
             {% endif %}
           {% endfor %}
           {{ out }}
 
-    - name: Print mount discrepancies
+    - name: Print mount audit report
       debug:
         msg: |
           Host: {{ inventory_hostname }}
           Missing mounts:
           {{ missing_mounts | join('\n') if missing_mounts else 'None' }}
+
           Mismatched mounts:
           {% if mismatched_mounts %}
-          {% for item in mismatched_mounts %}
-          - Mount: {{ item.mount }}
-            fstab:  {{ item.fstab_device }} ({{ item.fstab_fstype }})
-            live:   {{ item.live_device }} ({{ item.live_fstype }})
+          {% for m in mismatched_mounts %}
+          - {{ m.mount }}: fstab={{ m.fstab_device }} ({{ m.fstab_fstype }}), live={{ m.live_device }} ({{ m.live_fstype }})
           {% endfor %}
           {% else %}
           None
           {% endif %}
 
-    - name: Show df -Th output
+    - name: Print df -Th output like Linux
       command: df -Th
       register: df_out
       changed_when: false
 
-    - name: Print df -Th like server output
+    - name: Show df -Th output
       debug:
         msg: "{{ df_out.stdout }}"
