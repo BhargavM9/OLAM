@@ -1,8 +1,8 @@
 ---
-- name: Audit mounts vs fstab and show df -Th
+- name: Mount Audit and df -Th Output
   hosts: all
-  gather_facts: yes
   become: yes
+  gather_facts: yes
 
   vars:
     ignore_fstypes:
@@ -26,28 +26,6 @@
 
   tasks:
 
-    - name: Get UUID to device mapping
-      command: lsblk -o NAME,UUID -nr
-      register: blk_output
-      changed_when: false
-
-    - name: Build UUID -> /dev mapping
-      set_fact:
-        uuid_map: >-
-          {{
-            dict(
-              blk_output.stdout_lines
-              | map('split')
-              | selectattr('1', 'defined')
-              | map('extract', [0,1])
-              | map('combine', [{'uuid': item[1], 'device': '/dev/' ~ item[0]}])
-              | map(attribute='uuid', attribute2='device')
-            )
-          }}
-      loop: "{{ blk_output.stdout_lines }}"
-      loop_control:
-        label: "{{ item }}"
-
     - name: Parse expected mounts from /etc/fstab
       shell: |
         awk 'BEGIN{OFS="|"}
@@ -61,60 +39,49 @@
       changed_when: false
       failed_when: false
 
-    - name: Init fstab entries
-      set_fact:
-        fstab_entries: []
-      when: fstab_raw.stdout != ""
-
     - name: Build structured fstab entries
       set_fact:
         fstab_entries: >-
-          {{ fstab_entries + [ {'device': parts[0], 'mount': parts[1], 'fstype': parts[2], 'options': parts[3]} ] }}
-      vars:
-        parts: "{{ item.split('|') }}"
-      loop: "{{ fstab_raw.stdout_lines | default([]) }}"
-      when: fstab_raw.stdout != ""
+          {{
+            fstab_raw.stdout_lines | default([]) | map('split', '|') |
+            map('community.general.dict_kv', ['device', 'mount', 'fstype', 'options']) | list
+          }}
 
-    - name: Set live mounts from facts
+    - name: Set live mounts from ansible facts
       set_fact:
         live_mounts: "{{ ansible_mounts | rejectattr('fstype','in', ignore_fstypes) | list }}"
-
-    - name: Build list of live mount points
-      set_fact:
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
-    - name: Compute missing mounts (in fstab but not mounted)
+    - name: Compute missing mounts
       set_fact:
         missing_mounts: >-
           {{
-            (fstab_entries | map(attribute='mount') | list)
+            fstab_entries | map(attribute='mount') | list
             | difference(live_mount_points)
           }}
 
-    - name: Detect mismatches (UUID handling)
+    - name: Find mismatched mounts
       set_fact:
         mismatched_mounts: >-
           {% set out = [] %}
           {% for e in fstab_entries %}
             {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
             {% if live %}
-              {% set live_dev = live[0].device | default('') %}
-              {% set live_fstype = live[0].fstype | default('') %}
-              {% set expected_dev = (e.device.startswith('UUID=') and uuid_map.get(e.device.split('=')[1], 'UUID_NOT_FOUND')) or e.device %}
-              {% if expected_dev != live_dev or e.fstype != live_fstype %}
+              {% set dev_match = e.device.startswith('UUID=') or live[0].device == e.device %}
+              {% if not dev_match or e.fstype != live[0].fstype %}
                 {% set _ = out.append({
                   'mount': e.mount,
                   'fstab_device': e.device,
                   'fstab_fstype': e.fstype,
-                  'live_device': live_dev,
-                  'live_fstype': live_fstype
+                  'live_device': live[0].device,
+                  'live_fstype': live[0].fstype
                 }) %}
               {% endif %}
             {% endif %}
           {% endfor %}
           {{ out }}
 
-    - name: Show audit results
+    - name: Report issues found
       debug:
         msg: |
           Host: {{ inventory_hostname }}
@@ -122,11 +89,11 @@
           Mismatched mounts:
           {{ mismatched_mounts | to_nice_yaml }}
 
-    - name: Capture df -Th
+    - name: Print df -Th output
       command: df -Th
       register: df_out
       changed_when: false
 
-    - name: Print df -Th output
+    - name: Show df -Th (verbatim)
       debug:
         msg: "{{ df_out.stdout }}"
