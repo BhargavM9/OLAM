@@ -41,59 +41,72 @@
 
     - name: Build structured fstab entries
       set_fact:
-        fstab_entries: >-
+        fstab_entries: "{{ fstab_raw.stdout_lines | map('split', '|') | map('list') | map('extract_fstab') | list }}"
+      vars:
+        extract_fstab: >
           {{
-            fstab_raw.stdout_lines | default([]) | map('split', '|') |
-            map('community.general.dict_kv', ['device', 'mount', 'fstype', 'options']) | list
+            lambda x: {
+              'device': x[0],
+              'mount': x[1],
+              'fstype': x[2],
+              'options': x[3]
+            } if x|length == 4 else {}
           }}
 
-    - name: Set live mounts from ansible facts
+    - name: Filter live mounts from facts
       set_fact:
-        live_mounts: "{{ ansible_mounts | rejectattr('fstype','in', ignore_fstypes) | list }}"
+        live_mounts: "{{ ansible_mounts | rejectattr('fstype', 'in', ignore_fstypes) | list }}"
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
-    - name: Compute missing mounts
+    - name: Compute missing mounts (in fstab but not mounted)
       set_fact:
         missing_mounts: >-
-          {{
-            fstab_entries | map(attribute='mount') | list
-            | difference(live_mount_points)
-          }}
+          {{ fstab_entries | map(attribute='mount') | list | difference(live_mount_points) }}
 
-    - name: Find mismatched mounts
+    - name: Find mismatched mounts (device or fstype differ)
       set_fact:
         mismatched_mounts: >-
           {% set out = [] %}
           {% for e in fstab_entries %}
             {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
             {% if live %}
-              {% set dev_match = e.device.startswith('UUID=') or live[0].device == e.device %}
-              {% if not dev_match or e.fstype != live[0].fstype %}
+              {% set live_dev = live[0].device %}
+              {% set live_type = live[0].fstype %}
+              {% if (not e.device.startswith('UUID=')) and (e.device != live_dev or e.fstype != live_type) %}
                 {% set _ = out.append({
                   'mount': e.mount,
                   'fstab_device': e.device,
                   'fstab_fstype': e.fstype,
-                  'live_device': live[0].device,
-                  'live_fstype': live[0].fstype
+                  'live_device': live_dev,
+                  'live_fstype': live_type
                 }) %}
               {% endif %}
             {% endif %}
           {% endfor %}
           {{ out }}
 
-    - name: Report issues found
+    - name: Print mount discrepancies
       debug:
         msg: |
           Host: {{ inventory_hostname }}
-          Missing mounts: {{ missing_mounts }}
+          Missing mounts:
+          {{ missing_mounts | join('\n') if missing_mounts else 'None' }}
           Mismatched mounts:
-          {{ mismatched_mounts | to_nice_yaml }}
+          {% if mismatched_mounts %}
+          {% for item in mismatched_mounts %}
+          - Mount: {{ item.mount }}
+            fstab:  {{ item.fstab_device }} ({{ item.fstab_fstype }})
+            live:   {{ item.live_device }} ({{ item.live_fstype }})
+          {% endfor %}
+          {% else %}
+          None
+          {% endif %}
 
-    - name: Print df -Th output
+    - name: Show df -Th output
       command: df -Th
       register: df_out
       changed_when: false
 
-    - name: Show df -Th (verbatim)
+    - name: Print df -Th like server output
       debug:
         msg: "{{ df_out.stdout }}"
