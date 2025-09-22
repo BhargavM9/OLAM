@@ -1,5 +1,5 @@
 ---
-- name: Check Disk Usage and Compare with fstab
+- name: Verify /etc/fstab entries against df -Th
   hosts: all  # Adjust to your target hosts
   become: true  # Run with sudo privileges
   gather_facts: false
@@ -25,33 +25,25 @@
 
     - name: Parse fstab entries (mount points)
       ansible.builtin.set_fact:
-        fstab_mounts: "{{ (fstab_content['content'] | b64decode).split('\n') | reject('match', '^#') | reject('equalto', '') | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=1) | list }}"
+        fstab_mounts: "{{ (fstab_content['content'] | b64decode).split('\n') | reject('match', '^#') | reject('equalto', '') | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=1) | select('match', '^/') | list }}"
 
     - name: Print mounted filesystems from df
       ansible.builtin.debug:
-        msg: "Mounted filesystems: {{ mounted_filesystems }}"
+        msg: "Mounted filesystems (from df -Th): {{ mounted_filesystems }}"
 
     - name: Print fstab mount points
       ansible.builtin.debug:
         msg: "fstab mount points: {{ fstab_mounts }}"
 
-    - name: Find mounts in df not in fstab (possible dynamic or tmpfs mounts)
-      ansible.builtin.set_fact:
-        df_not_in_fstab: "{{ mounted_filesystems | difference(fstab_mounts) }}"
-
-    - name: Find entries in fstab not mounted (possible unmounted filesystems)
+    - name: Check for fstab entries not mounted
       ansible.builtin.set_fact:
         fstab_not_mounted: "{{ fstab_mounts | difference(mounted_filesystems) }}"
 
-    - name: Print mismatches
+    - name: Report mounts status
       ansible.builtin.debug:
-        msg:
-          - "Mounts in df but not in fstab: {{ df_not_in_fstab }}"
-          - "Entries in fstab but not mounted: {{ fstab_not_mounted }}"
-      when: df_not_in_fstab | length > 0 or fstab_not_mounted | length > 0
-      failed_when: false  # Don't fail the play, just report
-
-    - name: Print no mismatches if none found
-      ansible.builtin.debug:
-        msg: "No mismatches found between df mounts and fstab entries."
-      when: df_not_in_fstab | length == 0 and fstab_not_mounted | length == 0
+        msg: >-
+          {% if fstab_not_mounted | length == 0 %}
+          All mounts are good: All /etc/fstab entries ({{ fstab_mounts | join(', ') }}) are mounted.
+          {% else %}
+          Mounts are not good: The following /etc/fstab entries are not mounted: {{ fstab_not_mounted | join(', ') }}
+          {% endif %}
