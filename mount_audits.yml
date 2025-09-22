@@ -1,104 +1,58 @@
 ---
-- name: Audit mounts and display df -Th
-  hosts: all
-  become: yes
-  gather_facts: yes
-
-  vars:
-    ignore_fstypes:
-      - tmpfs
-      - devtmpfs
-      - proc
-      - sysfs
-      - cgroup
-      - cgroup2
-      - overlay
-      - debugfs
-      - selinuxfs
-      - autofs
-      - fusectl
-      - rpc_pipefs
-      - mqueue
-      - hugetlbfs
-      - pstore
-      - securityfs
-      - binfmt_misc
+- name: Check Disk Usage and Compare with fstab
+  hosts: all  # Adjust to your target hosts
+  become: true  # Run with sudo privileges
+  gather_facts: false
 
   tasks:
-
-    - name: Parse fstab entries into raw lines
-      shell: |
-        awk 'BEGIN{OFS="|"}
-             /^[[:space:]]*#/ {next}
-             NF < 4 {next}
-             $3=="swap" {next}
-             $4 ~ /noauto/ {next}
-             $3 ~ /^(proc|sysfs|devpts|tmpfs|cgroup|cgroup2|overlay|autofs|mqueue|hugetlbfs|pstore|securityfs|debugfs|selinuxfs|rpc_pipefs|binfmt_misc)$/ {next}
-             {print $1,$2,$3,$4}' /etc/fstab
-      register: fstab_raw
+    - name: Run df -Th and capture output
+      ansible.builtin.shell: df -Th
+      register: df_output
       changed_when: false
 
-    - name: Build structured fstab entries from raw lines
-      set_fact:
-        fstab_entries: "{{ fstab_entries | default([]) + [ {
-          'device': item.split('|')[0],
-          'mount':  item.split('|')[1],
-          'fstype': item.split('|')[2],
-          'options': item.split('|')[3]
-        } ] }}"
-      loop: "{{ fstab_raw.stdout_lines }}"
-      when: item.split('|') | length == 4
+    - name: Print df -Th output
+      ansible.builtin.debug:
+        msg: "{{ df_output.stdout_lines }}"
 
-    - name: Filter live mounts from ansible_mounts
-      set_fact:
-        live_mounts: "{{ ansible_mounts | rejectattr('fstype', 'in', ignore_fstypes) | list }}"
-        live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
+    - name: Parse mounted filesystems from df -Th
+      ansible.builtin.set_fact:
+        mounted_filesystems: "{{ df_output.stdout_lines | select('match', '^/dev/|^UUID=|^LABEL=') | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=6) | list }}"
 
-    - name: Find missing mounts (in fstab but not mounted)
-      set_fact:
-        missing_mounts: "{{ fstab_entries | map(attribute='mount') | list | difference(live_mount_points) }}"
+    - name: Read /etc/fstab content
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: fstab_content
 
-    - name: Find mismatched mounts
-      set_fact:
-        mismatched_mounts: >-
-          {% set out = [] %}
-          {% for e in fstab_entries %}
-            {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
-            {% if live %}
-              {% if not e.device.startswith('UUID=') and (live[0].device != e.device or live[0].fstype != e.fstype) %}
-                {% set _ = out.append({
-                  'mount': e.mount,
-                  'fstab_device': e.device,
-                  'fstab_fstype': e.fstype,
-                  'live_device': live[0].device,
-                  'live_fstype': live[0].fstype
-                }) %}
-              {% endif %}
-            {% endif %}
-          {% endfor %}
-          {{ out }}
+    - name: Parse fstab entries (mount points)
+      ansible.builtin.set_fact:
+        fstab_mounts: "{{ fstab_content['content'] | b64decode | splitlines | reject('match', '^#') | reject('equalto', '') | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=1) | list }}"
 
-    - name: Print mount audit report
-      debug:
-        msg: |
-          Host: {{ inventory_hostname }}
-          Missing mounts:
-          {{ missing_mounts | join('\n') if missing_mounts else 'None' }}
+    - name: Print mounted filesystems from df
+      ansible.builtin.debug:
+        msg: "Mounted filesystems: {{ mounted_filesystems }}"
 
-          Mismatched mounts:
-          {% if mismatched_mounts %}
-          {% for m in mismatched_mounts %}
-          - {{ m.mount }}: fstab={{ m.fstab_device }} ({{ m.fstab_fstype }}), live={{ m.live_device }} ({{ m.live_fstype }})
-          {% endfor %}
-          {% else %}
-          None
-          {% endif %}
+    - name: Print fstab mount points
+      ansible.builtin.debug:
+        msg: "fstab mount points: {{ fstab_mounts }}"
 
-    - name: Print df -Th output like Linux
-      command: df -Th
-      register: df_out
-      changed_when: false
+    - name: Find mounts in df not in fstab (possible dynamic or tmpfs mounts)
+      ansible.builtin.set_fact:
+        df_not_in_fstab: "{{ mounted_filesystems | difference(fstab_mounts) }}"
 
-    - name: Show df -Th output
-      debug:
-        msg: "{{ df_out.stdout }}"
+    - name: Find entries in fstab not mounted (possible unmounted filesystems)
+      ansible.builtin.set_fact:
+        fstab_not_mounted: "{{ fstab_mounts | difference(mounted_filesystems) }}"
+
+    - name: Print mismatches
+      ansible.builtin.debug:
+        msg:
+          - "Mounts in df but not in fstab: {{ df_not_in_fstab }}"
+          - "Entries in fstab but not mounted: {{ fstab_not_mounted }}"
+          - "No mismatches found."
+      when: df_not_in_fstab | length > 0 or fstab_not_mounted | length > 0
+      failed_when: false  # Don't fail the play, just report
+
+    - name: Print no mismatches if none found
+      ansible.builtin.debug:
+        msg: "No mismatches found between df mounts and fstab entries."
+      when: df_not_in_fstab | length == 0 and fstab_not_mounted | length == 0
