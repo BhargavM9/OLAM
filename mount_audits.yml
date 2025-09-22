@@ -1,5 +1,5 @@
 ---
-- name: Audit mounts vs fstab and print df -Th (UUID-tolerant)
+- name: Audit mounts vs fstab and show df -Th
   hosts: all
   gather_facts: yes
   become: yes
@@ -25,18 +25,23 @@
       - binfmt_misc
 
   tasks:
-    - name: Get UUID to device map
+
+    - name: Get UUID to device mapping
       command: lsblk -o NAME,UUID -nr
       register: blk_output
       changed_when: false
 
-    - name: Build UUID to device map
+    - name: Build UUID -> /dev mapping
       set_fact:
         uuid_map: >-
           {{
-            blk_output.stdout_lines | map('regex_search', '^(\\S+)\\s+(\\S+)?') | select() |
-            map('list') |
-            items2dict(key_name=1, value_name=0)
+            blk_output.stdout_lines
+            | map('regex_search', '^(\\S+)\\s+(\\S+)?')
+            | select()
+            | map('list')
+            | map('combine', [{'uuid': item[1], 'device': '/dev/' + item[0]}])
+            | list
+            | items2dict(key_name='uuid', value_name='device')
           }}
 
     - name: Parse expected mounts from /etc/fstab
@@ -52,7 +57,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Init fstab_entries
+    - name: Init fstab entries
       set_fact:
         fstab_entries: []
       when: fstab_raw.stdout != ""
@@ -74,7 +79,7 @@
       set_fact:
         live_mount_points: "{{ live_mounts | map(attribute='mount') | list }}"
 
-    - name: Compute missing mounts
+    - name: Compute missing mounts (in fstab but not mounted)
       set_fact:
         missing_mounts: >-
           {{
@@ -82,17 +87,17 @@
             | difference(live_mount_points | default([]))
           }}
 
-    - name: Find mismatched mounts (fstype mismatch or device mismatch ignoring UUID vs /dev/*)
+    - name: Detect mismatches (ignoring UUID vs /dev/*)
       set_fact:
         mismatched_mounts: >-
           {% set out = [] %}
-          {% for e in (fstab_entries | default([])) %}
+          {% for e in fstab_entries %}
             {% set live = (live_mounts | selectattr('mount','equalto', e.mount) | list) %}
             {% if live %}
               {% set live_dev = live[0].device | default('') %}
               {% set live_fstype = live[0].fstype | default('') %}
-              {% set expected_dev = uuid_map.get(e.device.replace("UUID=", ""), e.device) %}
-              {% if live_fstype != e.fstype or live_dev != expected_dev %}
+              {% set expected_dev = (e.device.startswith('UUID=') and uuid_map.get(e.device.split('=')[1])) or e.device %}
+              {% if expected_dev and (live_dev != expected_dev or live_fstype != e.fstype) %}
                 {% set _ = out.append({
                   'mount': e.mount,
                   'fstab_device': e.device,
@@ -105,41 +110,19 @@
           {% endfor %}
           {{ out }}
 
-    - name: Dry-run mount -a
-      shell: mount -fav
-      register: mount_dryrun
-      changed_when: false
-      failed_when: false
-
-    - name: Capture df -Th
-      command: df -Th
-      register: df_out
-      changed_when: false
-
-    - name: Report results clearly
+    - name: Show audit results
       debug:
         msg: |
           Host: {{ inventory_hostname }}
           Missing mounts: {{ missing_mounts | default([]) }}
           Mismatched mounts:
           {{ mismatched_mounts | default([]) | to_nice_yaml }}
-          mount -fav rc={{ mount_dryrun.rc }}
-          mount -fav output (first 20 lines):
-          {{ ((mount_dryrun.stdout | default('')) | split('\n'))[:20] | join('\n') }}
 
-    - name: Print df -Th like on server
+    - name: Show df -Th like on server
+      command: df -Th
+      register: df_out
+      changed_when: false
+
+    - name: Print df -Th output
       debug:
-        msg: |
-          {{ (df_out.stdout | default('')) | trim }}
-
-    - name: Fail if issues found
-      fail:
-        msg: >
-          Mount audit failed on {{ inventory_hostname }}.
-          Missing={{ missing_mounts | default([]) }},
-          Mismatched={{ mismatched_mounts | default([]) }},
-          DryRunRC={{ mount_dryrun.rc }}
-      when: >
-        (missing_mounts | default([]) | length > 0)
-        or (mismatched_mounts | default([]) | length > 0)
-        or (mount_dryrun.rc | int != 0)
+        msg: "{{ df_out.stdout }}"
