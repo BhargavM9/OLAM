@@ -38,11 +38,12 @@
 
     - name: Filter exceeding filesystems
       set_fact:
-        exceeding_filesystems: "{{ df_output.stdout_lines[1:] | select('regex_search', '\\s(\\d+)%\\s') | select('regex_replace', '.*\\s(\\d+)%\\s.*', '\\1') | select('int') | select('>', 45) | map('regex_replace', '^(\\d+)$', '\\g<1>') | zip(df_output.stdout_lines[1:]) | map('combine', {'usage': item[0], 'line': item[1]}) | list }}"
+        exceeding_filesystems: "{{ exceeding_filesystems | default([]) + ([item] | select('match', '\\s\\d+%\\s') | select('regex_replace', '.*\\s(\\d+)%\\s.*', '\\1') | select('int') | select('>', 45) | map('regex_replace', '^(\\d+)$', item)) }}"
+      loop: "{{ df_output.stdout_lines[1:] }}"
       when: df_output.stdout_lines[1:] | length > 0
 
     - name: Report exceeding disk usage
       debug:
-        msg: "Filesystem {{ item.line.split()[0] }} or mount point {{ item.line.split()[6] }} on this host exceeds 45% with {{ item.usage }}%."
+        msg: "Filesystem {{ item.split()[0] }} or mount point {{ item.split()[6] }} on this host exceeds 45% with {{ (item.split()[4] | regex_replace('%', '')) }}%."
       loop: "{{ exceeding_filesystems }}"
       when: exceeding_filesystems | length > 0
