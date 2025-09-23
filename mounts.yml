@@ -32,15 +32,23 @@
       debug:
         msg: "{{ mount_check.stdout }}"
 
+    - name: Check if host has risky disks
+      set_fact:
+        risky_disks: >-
+          [{% for line in df_output.stdout_lines[1:] %}
+            {% set cols = line.split() %}
+            {% set usage = (cols[5] | regex_replace('%','') | int) %}
+            {% if usage > 45 %}
+              {"fs": "{{ cols[0] }}", "mount": "{{ cols[6] }}", "usage": "{{ cols[5] }}"},
+            {% endif %}
+          {% endfor %}]
+      changed_when: false
+
     - name: Report exceeding disk usage
       debug:
         msg: >-
-          {% for line in df_output.stdout_lines[1:] %}
-          {% set cols = line.split() %}
-          {% set usage = (cols[5] | regex_replace('%','') | int) %}
-          {% if usage > 45 %}
-          Filesystem {{ cols[0] }} or mount point {{ cols[6] }}
-          on this host exceeds 45% with {{ cols[5] }}.
-          {% endif %}
+          {% for d in risky_disks %}
+          Filesystem {{ d.fs }} or mount point {{ d.mount }}
+          on this host exceeds 45% with {{ d.usage }}.
           {% endfor %}
-      when: df_output.stdout_lines | length > 1
+      when: risky_disks | length > 0
