@@ -36,16 +36,30 @@
       debug:
         msg: "{{ mount_check.stdout }}"
 
-    - name: Initialize exceeding
-      set_fact:
-        exceeding: []
-
     - name: Collect exceeding filesystems
+      shell: |
+        df_lines=$(df -Th | tail -n +2)
+        exceeding_count=0
+        while read -r line; do
+          fields=($line)
+          if [ ${#fields[@]} -ge 7 ]; then
+            usage="${fields[5]}"
+            if [[ $usage =~ ^([0-9]+)%$ ]] && [ ${BASH_REMATCH[1]} -gt 45 ]; then
+              exceeding_count=$((exceeding_count + 1))
+            fi
+          fi
+        done <<< "$df_lines"
+        if [ $exceeding_count -gt 0 ]; then
+          echo "[$(for i in $(seq 1 $exceeding_count); do echo "{\"fs\":\"${fields[0]}\",\"mount\":\"${fields[6]}\",\"usage\":\"${fields[5]}\"}"; done | head -n $exceeding_count)]"
+        else
+          echo "[]"
+        fi
+      register: exceeding_raw
+      changed_when: false
+
+    - name: Parse exceeding filesystems
       set_fact:
-        exceeding: "{{ exceeding + ( (item.split() | length >= 7 and item.split()[5] | regex_search('^[0-9]+%$') | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
-      loop: "{{ df_output.stdout_lines[1:] }}"
-      when: item is string and item.split() | length >= 7 and item.split()[5] | regex_search('^[0-9]+%$')
-      no_log: true
+        exceeding: "{{ exceeding_raw.stdout | from_json }}"
 
     - name: Report collecting done
       debug:
