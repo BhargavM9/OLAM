@@ -43,11 +43,4 @@
           on this host exceeds 45% with {{ cols[5] }}.
           {% endif %}
           {% endfor %}
-      when: >
-        df_output.stdout_lines[1:] |
-        map('split') |
-        selectattr('5','defined') |
-        map('5') |
-        map('regex_replace','%','') |
-        map('int') |
-        select('>',45) | list | length > 0
+      when: df_output.stdout_lines | length > 1
