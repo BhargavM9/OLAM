@@ -46,6 +46,10 @@
       loop: "{{ df_output.stdout_lines[1:] }}"
       no_log: true
 
+    - name: Report collecting done
+      debug:
+        msg: "collecting is done"
+
     - name: Report exceeding disk usage
       debug:
         msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
