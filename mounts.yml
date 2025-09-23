@@ -44,7 +44,9 @@
       set_fact:
         exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
+      no_log: true
 
     - name: Report exceeding disk usage
       debug:
         msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
+      when: exceeding | length > 0
