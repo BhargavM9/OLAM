@@ -38,8 +38,7 @@
 
     - name: Filter exceeding filesystems
       set_fact:
-        exceeding_filesystems: "{{ exceeding_filesystems | default([]) + (item.split() | length >= 7 and (item.split()[4] | regex_replace('%', '') | int > 45) | ternary([item], [])) }}"
-      loop: "{{ df_output.stdout_lines[1:] }}"
+        exceeding_filesystems: "{{ df_output.stdout_lines[1:] | select('match', '.*\\s\\d+%\\s.*') | select('split') | select('length', '>=', 7) | select('regex_replace', '.*\\s(\\d+)%\\s.*', '\\1') | select('int') | select('>', 45) | map('regex_replace', '^(\\d+)$', item) | zip(df_output.stdout_lines[1:]) | map('combine', {'usage': item[0], 'line': item[1]}) | map(attribute='line') | list }}"
       when: df_output.stdout_lines[1:] | length > 0
 
     - name: Report exceeding disk usage
