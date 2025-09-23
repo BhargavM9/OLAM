@@ -44,7 +44,10 @@
           {% endif %}
           {% endfor %}
       when: >
-        df_output.stdout_lines | select('search','%') |
-        map('regex_replace','[^0-9]','') |
+        df_output.stdout_lines[1:] |
+        map('split') |
+        selectattr('5','defined') |
+        map('5') |
+        map('regex_replace','%','') |
         map('int') |
         select('>',45) | list | length > 0
