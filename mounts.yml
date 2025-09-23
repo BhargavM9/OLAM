@@ -38,12 +38,12 @@
 
     - name: Filter exceeding filesystems
       set_fact:
-        exceeding_filesystems: "{{ exceeding_filesystems | default([]) + ([item] | select('match', '\\s\\d+%\\s') | select('regex_replace', '.*\\s(\\d+)%\\s.*', '\\1') | select('int') | select('>', 45) | map('regex_replace', '^(\\d+)$', item)) }}"
+        exceeding_filesystems: "{{ exceeding_filesystems | default([]) + (item.split() | length >= 7 and (item.split()[4] | regex_replace('%', '') | int > 45) | ternary([item], [])) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
       when: df_output.stdout_lines[1:] | length > 0
 
     - name: Report exceeding disk usage
       debug:
-        msg: "Filesystem {{ item.split()[0] }} or mount point {{ item.split()[6] }} on this host exceeds 45% with {{ (item.split()[4] | regex_replace('%', '')) }}%."
+        msg: "Filesystem {{ item.split()[0] }} or mount point {{ item.split()[6] }} on this host exceeds 45% with {{ item.split()[4] }}."
       loop: "{{ exceeding_filesystems }}"
       when: exceeding_filesystems | length > 0
