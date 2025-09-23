@@ -14,27 +14,29 @@
       debug:
         msg: "{{ df_output.stdout_lines }}"
 
-    - name: Verify mounts and parse fstab
-      block:
-        - name: Get /etc/fstab contents
-          command: cat /etc/fstab
-          register: fstab_content
-          changed_when: false
-
-        - name: Compare mount points
-          set_fact:
-            fstab_mounts: "{{ fstab_content.stdout_lines | select('match', '^[^#].+') | reject('match', 'swap') | map('split') | select('length', '>=', 4) | map(attribute=1) | list }}"
-            mounted_filesystems: "{{ df_output.stdout_lines[1:] | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=6) | list }}"
-            missing_mounts: "{{ fstab_mounts | difference(mounted_filesystems) }}"
-      no_log: true  # Suppress intermediate output
+    - name: Verify mounts
+      shell: |
+        # Get fstab mount points, excluding comments and swap
+        fstab_mounts=$(awk '!/^#/ && $3 != "swap" && NF >= 4 {print $2}' /etc/fstab | sort -u)
+        # Get df mount points, excluding header
+        df_mounts=$(df -Th | awk 'NR>1 {print $NF}' | sort -u)
+        # Find missing mounts using comm
+        missing=$(comm -23 <(echo "$fstab_mounts") <(echo "$df_mounts") | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$missing" ]; then
+          echo "All mounts are good on {{ inventory_hostname }}"
+        else
+          echo "Missing mounts on {{ inventory_hostname }}: $missing"
+        fi
+      register: mount_check
+      changed_when: false
 
     - name: Report mount verification
       debug:
-        msg: "{{ 'All mounts are good on ' + inventory_hostname if missing_mounts | length == 0 else 'Missing mounts on ' + inventory_hostname + ': ' + missing_mounts | join(', ') }}"
+        msg: "{{ mount_check.stdout }}"
 
     - name: Check and report exceeding disk usage
       debug:
         msg: "{{ 'Filesystem ' + item.split()[0] + ' or mount point ' + item.split()[6] + ' on this host exceeds 45% with ' + item.split()[4] + '.' }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
       when: item.split()[4] | default('0%') | regex_replace('%', '') | int > 45
-      no_log: "{{ item.split()[4] | default('0%') | regex_replace('%', '') | int <= 45 }}"  # Suppress non-exceeding items
+      no_log: "{{ item.split()[4] | default('0%') | regex_replace('%', '') | int <= 45 }}"
