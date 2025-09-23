@@ -24,15 +24,12 @@
           on this host exceeds 45% with {{ line.split()[5] }}.
           {% endif %}
           {% endfor %}
-      vars:
-        risky: >-
-          {{ df_output.stdout_lines[1:] |
-             map('split') |
-             selectattr('5','defined') |
-             selectattr('5','regex_search','[0-9]+%') |
-             map(attribute='5') |
-             map('regex_replace','%','') |
-             map('int') |
-             select('>',45) |
-             list }}
-      when: risky | length > 0
+      when: >
+        df_output.stdout_lines[1:] |
+        map('split') |
+        map('last') |
+        map('regex_replace','[^0-9]','') |
+        map('int') |
+        select('>',45) |
+        list | length > 0
+      failed_when: false
