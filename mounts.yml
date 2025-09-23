@@ -42,13 +42,15 @@
 
     - name: Collect exceeding filesystems
       set_fact:
-        exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
+        exceeding: "{{ exceeding + ( (item.split() | length >= 7 and item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
+      when: item.split() | length >= 7
       no_log: true
 
     - name: Report collecting done
       debug:
         msg: "collecting is done"
+      run_once: true
 
     - name: Report exceeding disk usage
       debug:
