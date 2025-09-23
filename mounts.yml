@@ -19,32 +19,36 @@
       register: fstab_content
       changed_when: false
 
+    - name: Initialize fstab_mounts
+      set_fact:
+        fstab_mounts: []
+
     - name: Parse fstab for mount points
       set_fact:
-        fstab_mounts: "{{ fstab_mounts | default([]) + [item.split()[1]] }}"
+        fstab_mounts: "{{ fstab_mounts + ( (item | trim | length > 0 and not item.startswith('#') and item.split() | length >= 4 and item.split()[2] != 'swap') | ternary( [item.split()[1]], [] ) ) }}"
       loop: "{{ fstab_content.stdout_lines }}"
-      when: item | trim | length > 0 and not item.startswith('#') and item.split() | length >= 4 and item.split()[2] != 'swap'
-      vars:
-        fstab_mounts: []
 
     - name: Get mounted filesystems from df
       set_fact:
-        mounted_filesystems: "{{ mounted_filesystems | default([]) + [item.split()[6]] }}"
-      loop: "{{ df_output.stdout_lines[1:] }}"  # Skip header
-      vars:
-        mounted_filesystems: []
+        mounted_filesystems: "{{ df_output.stdout_lines[1:] | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute='6') | list }}"
 
     - name: Find missing mounts
       set_fact:
         missing_mounts: "{{ fstab_mounts | difference(mounted_filesystems) }}"
 
-    - name: Report missing mounts if any
+    - name: Verify mounts
       debug:
-        msg: "Missing mounts on {{ inventory_hostname }}: {{ missing_mounts }}"
-      when: missing_mounts | length > 0
+        msg: "{% if missing_mounts | length == 0 %}All mounts are good on {{ inventory_hostname }}{% else %}Missing mounts on {{ inventory_hostname }}: {{ missing_mounts }}{% endif %}"
 
-    - name: Check disk usage
+    - name: Initialize exceeding
+      set_fact:
+        exceeding: []
+
+    - name: Collect exceeding filesystems
+      set_fact:
+        exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
+      loop: "{{ df_output.stdout_lines[1:] }}"
+
+    - name: Report exceeding disk usage
       debug:
-        msg: "Filesystem {{ item.split()[0] }} on mount point {{ item.split()[5] }} on host {{ inventory_hostname }} exceeds 90% usage with {{ item.split()[4] }} used."
-      loop: "{{ df_output.stdout_lines[1:] }}"  # Skip header
-      when: item.split()[4] | default('0%') | regex_replace('%', '') | int > 90
+        msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
