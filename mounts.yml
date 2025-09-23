@@ -14,41 +14,27 @@
       debug:
         msg: "{{ df_output.stdout_lines }}"
 
-    - name: Get /etc/fstab contents
-      command: cat /etc/fstab
-      register: fstab_content
-      changed_when: false
+    - name: Verify mounts and parse fstab
+      block:
+        - name: Get /etc/fstab contents
+          command: cat /etc/fstab
+          register: fstab_content
+          changed_when: false
 
-    - name: Initialize fstab_mounts
-      set_fact:
-        fstab_mounts: []
+        - name: Compare mount points
+          set_fact:
+            fstab_mounts: "{{ fstab_content.stdout_lines | select('match', '^[^#].+') | reject('match', 'swap') | map('split') | select('length', '>=', 4) | map(attribute=1) | list }}"
+            mounted_filesystems: "{{ df_output.stdout_lines[1:] | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute=6) | list }}"
+            missing_mounts: "{{ fstab_mounts | difference(mounted_filesystems) }}"
+      no_log: true  # Suppress intermediate output
 
-    - name: Parse fstab for mount points
-      set_fact:
-        fstab_mounts: "{{ fstab_mounts + ( (item | trim | length > 0 and not item.startswith('#') and item.split() | length >= 4 and item.split()[2] != 'swap') | ternary( [item.split()[1]], [] ) ) }}"
-      loop: "{{ fstab_content.stdout_lines }}"
-
-    - name: Get mounted filesystems from df
-      set_fact:
-        mounted_filesystems: "{{ df_output.stdout_lines[1:] | map('regex_replace', '\\s+', ' ') | map('split', ' ') | map(attribute='6') | list }}"
-
-    - name: Find missing mounts
-      set_fact:
-        missing_mounts: "{{ fstab_mounts | difference(mounted_filesystems) }}"
-
-    - name: Verify mounts
+    - name: Report mount verification
       debug:
-        msg: "{% if missing_mounts | length == 0 %}All mounts are good on {{ inventory_hostname }}{% else %}Missing mounts on {{ inventory_hostname }}: {{ missing_mounts }}{% endif %}"
+        msg: "{{ 'All mounts are good on ' + inventory_hostname if missing_mounts | length == 0 else 'Missing mounts on ' + inventory_hostname + ': ' + missing_mounts | join(', ') }}"
 
-    - name: Initialize exceeding
-      set_fact:
-        exceeding: []
-
-    - name: Collect exceeding filesystems
-      set_fact:
-        exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
+    - name: Check and report exceeding disk usage
+      debug:
+        msg: "{{ 'Filesystem ' + item.split()[0] + ' or mount point ' + item.split()[6] + ' on this host exceeds 45% with ' + item.split()[4] + '.' }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
-
-    - name: Report exceeding disk usage
-      debug:
-        msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
+      when: item.split()[4] | default('0%') | regex_replace('%', '') | int > 45
+      no_log: "{{ item.split()[4] | default('0%') | regex_replace('%', '') | int <= 45 }}"  # Suppress non-exceeding items
