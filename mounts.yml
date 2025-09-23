@@ -16,40 +16,43 @@
 
     - name: Verify mounts
       shell: |
+        #!/usr/bin/env bash
+        set -euo pipefail
         fstab_mounts=$(awk '!/^#/ && $3 != "swap" && NF >= 4 {print $2}' /etc/fstab | sort -u)
         df_mounts=$(df -Th | awk 'NR>1 {print $NF}' | sort -u)
         missing=$(comm -23 <(echo "$fstab_mounts") <(echo "$df_mounts") | tr '\n' ',' | sed 's/,$//')
         if [ -n "$missing" ]; then
           echo "Missing mounts on {{ inventory_hostname }}: $missing"
         fi
+      args:
+        executable: /bin/bash
       register: mount_check
       changed_when: false
 
-    - name: Report mount verification
+    - name: Report mount verification (only if something is missing)
       debug:
         msg: "{{ mount_check.stdout }}"
-      when: mount_check.stdout != ""
+      when: mount_check.stdout | trim != ""
 
-    - name: Report exceeding disk usage
+    - name: Report exceeding disk usage (only risky hosts will print)
+      vars:
+        risky_msg: |-
+          {%- set out = [] -%}
+          {%- for line in df_output.stdout_lines[1:] -%}
+            {%- set cols = line.split() -%}
+            {#- Guard against short/odd lines -#}
+            {%- if cols|length > 6 and cols[5] is string and cols[5].endswith('%') -%}
+              {%- set usage = (cols[5][:-1] | int) -%}
+              {%- if usage > 45 -%}
+                {%- set _ = out.append(
+                  'Filesystem %s or mount point %s on this host exceeds 45%% with %s.'
+                  % (cols[0], cols[6], cols[5])
+                ) -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out | join('\n') }}
       debug:
-        msg: >-
-          {% set risky = [] %}
-          {% for line in df_output.stdout_lines[1:] %}
-            {% set cols = line.split() %}
-            {% set usage = (cols[5] | regex_replace('%','') | int) %}
-            {% if usage > 45 %}
-              {% set _ = risky.append(
-                "Filesystem %s or mount point %s on this host exceeds 45%% with %s."
-                % (cols[0], cols[6], cols[5])
-              ) %}
-            {% endif %}
-          {% endfor %}
-          {{ risky | join('\n') }}
-      when: >-
-        df_output.stdout_lines[1:] |
-        map('split') |
-        selectattr('5','defined') |
-        map('5') |
-        map('regex_replace','%','') |
-        map('int') |
-        select('>',45) | list | length > 0
+        msg: "{{ risky_msg }}"
+      when: risky_msg | trim != ""
+      changed_when: false
