@@ -9,18 +9,30 @@
       command: df -Th
       register: df_output
       changed_when: false
-      no_log: true   # 🔇 hide this task from all hosts
+
+    - name: Display df -Th output
+      debug:
+        msg: "{{ df_output.stdout_lines }}"
 
     - name: Report exceeding disk usage
       debug:
         msg: >-
           {% for line in df_output.stdout_lines[1:] %}
-          {% set usage = (line.split()[5] | default('0%') | regex_replace('%','') | int) %}
+          {% set usage = (line.split()[5] | regex_replace('%','') | int) %}
           {% if usage > 45 %}
           Filesystem {{ line.split()[0] }} or mount point {{ line.split()[6] }}
           on this host exceeds 45% with {{ line.split()[5] }}.
           {% endif %}
           {% endfor %}
-      when: >
-        df_output.stdout_lines[1:] | map('regex_search','([0-9]+)%') |
-        map('first') | map('int') | select('>',45) | list | length > 0
+      vars:
+        risky: >-
+          {{ df_output.stdout_lines[1:] |
+             map('split') |
+             selectattr('5','defined') |
+             selectattr('5','regex_search','[0-9]+%') |
+             map(attribute='5') |
+             map('regex_replace','%','') |
+             map('int') |
+             select('>',45) |
+             list }}
+      when: risky | length > 0
