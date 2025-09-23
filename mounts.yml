@@ -22,8 +22,10 @@
         df_mounts=$(df -Th | awk 'NR>1 {print $NF}' | sort -u)
         # Find missing mounts using comm
         missing=$(comm -23 <(echo "$fstab_mounts") <(echo "$df_mounts") | tr '\n' ',' | sed 's/,$//')
+        # Get comma-separated fstab mount points for reporting
+        fstab_mounts_list=$(echo "$fstab_mounts" | tr '\n' ',' | sed 's/,$//')
         if [ -z "$missing" ]; then
-          echo "All mounts are good on {{ inventory_hostname }}"
+          echo "All mounts are good on {{ inventory_hostname }}: $fstab_mounts_list"
         else
           echo "Missing mounts on {{ inventory_hostname }}: $missing"
         fi
@@ -34,9 +36,13 @@
       debug:
         msg: "{{ mount_check.stdout }}"
 
-    - name: Check and report exceeding disk usage
+    - name: Filter exceeding filesystems
+      set_fact:
+        exceeding_filesystems: "{{ df_output.stdout_lines[1:] | select('regex_search', '\\s(\\d+)%\\s') | select('regex_replace', '.*\\s(\\d+)%\\s.*', '\\1') | select('int') | select('>', 45) | map('regex_replace', '^(\\d+)$', '\\g<1>') | zip(df_output.stdout_lines[1:]) | map('combine', {'usage': item[0], 'line': item[1]}) | list }}"
+      when: df_output.stdout_lines[1:] | length > 0
+
+    - name: Report exceeding disk usage
       debug:
-        msg: "{{ 'Filesystem ' + item.split()[0] + ' or mount point ' + item.split()[6] + ' on this host exceeds 45% with ' + item.split()[4] + '.' }}"
-      loop: "{{ df_output.stdout_lines[1:] }}"
-      when: item.split()[4] | default('0%') | regex_replace('%', '') | int > 45
-      no_log: "{{ item.split()[4] | default('0%') | regex_replace('%', '') | int <= 45 }}"
+        msg: "Filesystem {{ item.line.split()[0] }} or mount point {{ item.line.split()[6] }} on this host exceeds 45% with {{ item.usage }}%."
+      loop: "{{ exceeding_filesystems }}"
+      when: exceeding_filesystems | length > 0
