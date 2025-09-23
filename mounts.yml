@@ -36,11 +36,14 @@
       debug:
         msg: "{{ mount_check.stdout }}"
 
-    - name: Filter exceeding filesystems
+    - name: Initialize exceeding
       set_fact:
-        exceeding_filesystems: "{{ exceeding_filesystems | default([]) + (item | split | length >= 7 and item | split | item[4] | regex_replace('%', '') | int > 45 | ternary([item], [])) }}"
+        exceeding: []
+
+    - name: Collect exceeding filesystems
+      set_fact:
+        exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
-      when: df_output.stdout_lines[1:] | length > 0
 
     - name: Report exceeding disk usage
       debug:
