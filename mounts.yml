@@ -42,9 +42,9 @@
 
     - name: Collect exceeding filesystems
       set_fact:
-        exceeding: "{{ exceeding + ( (item.split() | length >= 7 and item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
+        exceeding: "{{ exceeding + ( (item.split() | length >= 7 and item.split()[5] | regex_search('^[0-9]+%$') | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
-      when: item.split() | length >= 7
+      when: item is string and item.split() | length >= 7 and item.split()[5] | regex_search('^[0-9]+%$')
       no_log: true
 
     - name: Report collecting done
