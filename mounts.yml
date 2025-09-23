@@ -36,17 +36,15 @@
       debug:
         msg: >-
           {% for line in df_output.stdout_lines[1:] %}
-          {% set usage = (line.split()[5] | regex_replace('%','') | int) %}
+          {% set cols = line.split() %}
+          {% set usage = (cols[5] | regex_replace('%','') | int) %}
           {% if usage > 45 %}
-          Filesystem {{ line.split()[0] }} or mount point {{ line.split()[6] }}
-          on this host exceeds 45% with {{ line.split()[5] }}.
+          Filesystem {{ cols[0] }} or mount point {{ cols[6] }}
+          on this host exceeds 45% with {{ cols[5] }}.
           {% endif %}
           {% endfor %}
       when: >
-        df_output.stdout_lines[1:] |
-        map('split') |
-        map('5') |
-        map('regex_replace','%','') |
+        df_output.stdout_lines | select('search','%') |
+        map('regex_replace','[^0-9]','') |
         map('int') |
-        select('>',45) |
-        list | length > 0
+        select('>',45) | list | length > 0
