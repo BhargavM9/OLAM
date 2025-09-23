@@ -32,20 +32,14 @@
       debug:
         msg: "{{ mount_check.stdout }}"
 
-    - name: Initialize exceeding
-      set_fact:
-        exceeding: []
-      no_log: true   # 🔇 keep silent across all hosts
-
-    - name: Collect exceeding filesystems
-      set_fact:
-        exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
-      loop: "{{ df_output.stdout_lines[1:] }}"
-      loop_control:
-        label: ""     # hides (item=...) spam
-      no_log: true    # 🔇 avoid per-host noise
-
     - name: Report exceeding disk usage
       debug:
-        msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
-      when: exceeding | length > 0
+        msg: >-
+          {% for line in df_output.stdout_lines[1:] %}
+          {% set usage = (line.split()[5] | default('0%') | regex_replace('%','') | int) %}
+          {% if usage > 45 %}
+          Filesystem {{ line.split()[0] }} or mount point {{ line.split()[6] }}
+          on this host exceeds 45% with {{ line.split()[5] }}.
+          {% endif %}
+          {% endfor %}
+      when: df_output.stdout_lines | select('search','%') | list | length > 1
