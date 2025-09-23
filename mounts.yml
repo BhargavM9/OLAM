@@ -14,6 +14,24 @@
       debug:
         msg: "{{ df_output.stdout_lines }}"
 
+    - name: Verify mounts
+      shell: |
+        fstab_mounts=$(awk '!/^#/ && $3 != "swap" && NF >= 4 {print $2}' /etc/fstab | sort -u)
+        df_mounts=$(df -Th | awk 'NR>1 {print $NF}' | sort -u)
+        missing=$(comm -23 <(echo "$fstab_mounts") <(echo "$df_mounts") | tr '\n' ',' | sed 's/,$//')
+        fstab_mounts_list=$(echo "$fstab_mounts" | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$missing" ]; then
+          echo "All mounts are good on {{ inventory_hostname }}: $fstab_mounts_list"
+        else
+          echo "Missing mounts on {{ inventory_hostname }}: $missing"
+        fi
+      register: mount_check
+      changed_when: false
+
+    - name: Report mount verification
+      debug:
+        msg: "{{ mount_check.stdout }}"
+
     - name: Report exceeding disk usage
       debug:
         msg: >-
@@ -27,9 +45,8 @@
       when: >
         df_output.stdout_lines[1:] |
         map('split') |
-        map('last') |
-        map('regex_replace','[^0-9]','') |
+        map('5') |
+        map('regex_replace','%','') |
         map('int') |
         select('>',45) |
         list | length > 0
-      failed_when: false
