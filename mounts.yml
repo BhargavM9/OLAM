@@ -44,6 +44,4 @@
 
     - name: Report exceeding disk usage
       debug:
-        msg: "Filesystem {{ item.split()[0] }} or mount point {{ item.split()[6] }} on this host exceeds 45% with {{ item.split()[4] }}."
-      loop: "{{ exceeding_filesystems }}"
-      when: exceeding_filesystems | length > 0
+        msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
