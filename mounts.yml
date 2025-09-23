@@ -35,18 +35,17 @@
     - name: Initialize exceeding
       set_fact:
         exceeding: []
-      no_log: true    # 🔇 hide useless host logs
+      no_log: true   # 🔇 keep silent across all hosts
 
     - name: Collect exceeding filesystems
       set_fact:
         exceeding: "{{ exceeding + ( (item.split()[5] | default('0%') | regex_replace('%','') | int > 45) | ternary( [ {'fs': item.split()[0], 'mount': item.split()[6], 'usage': item.split()[5]} ] , [] ) ) }}"
       loop: "{{ df_output.stdout_lines[1:] }}"
       loop_control:
-        label: ""
-      no_log: true    # 🔇 hide item and host spam
+        label: ""     # hides (item=...) spam
+      no_log: true    # 🔇 avoid per-host noise
 
     - name: Report exceeding disk usage
       debug:
         msg: "{% for e in exceeding %}Filesystem {{ e.fs }} or mount point {{ e.mount }} on this host exceeds 45% with {{ e.usage }}.\n{% endfor %}"
       when: exceeding | length > 0
-      no_log: false   # 👈 still show risky hosts only
