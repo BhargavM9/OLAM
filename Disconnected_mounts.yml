@@ -1,0 +1,38 @@
+---
+- name: Check mounts and filesystems on VMware VMs
+  hosts: all
+  gather_facts: no
+  become: true
+
+  tasks:
+    # Check mounted filesystems
+    - name: Get mounted filesystems
+      command: df -hT
+      register: df_output
+      changed_when: false
+
+    # Check for disconnected or stale network mounts
+    - name: Check for disconnected network mounts
+      shell: mount | grep -i 'stale\|nfs\|cifs' || true
+      register: disconnected_mounts
+      changed_when: false
+
+    # Check filesystem type of local block devices
+    - name: Get block devices and filesystem info
+      command: lsblk -f
+      register: block_devices
+      changed_when: false
+
+    # Report everything
+    - name: Report mounts and filesystems
+      debug:
+        msg: |
+          ========= {{ inventory_hostname }} =========
+          Mounted Filesystems:
+          {{ df_output.stdout }}
+
+          Potentially Disconnected/Stale Mounts:
+          {{ disconnected_mounts.stdout }}
+
+          Block Devices and Filesystems:
+          {{ block_devices.stdout }}
