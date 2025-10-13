@@ -5,21 +5,36 @@
   become: yes
 
   tasks:
-    - name: Find read-only files (no write permission for anyone)
+    - name: Find all regular files (excluding system dirs for safety)
       ansible.builtin.find:
         paths: /
         recurse: yes
         file_type: file
-        # Match files with no write permission (0002 + 0020 + 0200 = no write bits)
-        # Mode 444 means readable by all, writable by none
-        patterns: '*'
+        excludes:
+          - /proc
+          - /sys
+          - /dev
+          - /run
+          - /tmp
+          - /var/tmp
       register: all_files
 
-    - name: Filter read-only files
+    - name: Filter files that are read-only (no write permission)
       set_fact:
-        readonly_files: "{{ all_files.files | selectattr('mode', 'match', '^44[4-5]$') | list }}"
+        readonly_files: >-
+          {{
+            all_files.files
+            | selectattr('mode', 'match', '^0?4[0-7][0-7][0-7]$')
+            | selectattr('mode', 'search', '^[0-7]*4[0-4][0-4]$')
+            | list
+          }}
 
-    - name: Display read-only files
+    - name: Print total number of read-only files
       debug:
-        msg: "{{ item.path }}"
+        msg: "Found {{ readonly_files | length }} read-only files"
+
+    - name: Display read-only file paths
+      debug:
+        var: item.path
       loop: "{{ readonly_files }}"
+      when: readonly_files | length > 0
